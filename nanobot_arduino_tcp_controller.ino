@@ -16,6 +16,11 @@ unsigned long last_step_ms = 0;
 const unsigned long STEP_INTERVAL_MS = 15; // ~66 Hz step rate
 const int MAX_STEP_DEG = 1;               // smaller = smoother/slower, larger = faster
 
+struct ParsedCommand {
+  const char* elements[4] = {nullptr, nullptr, nullptr, nullptr};
+  int count = 0;
+};
+
 void applyAngles() {
   for (int i = 0; i < 4; i++) {
     int clamped = constrain(current_angle[i], 0, 180);
@@ -23,40 +28,44 @@ void applyAngles() {
   }
 }
 
-int countChar(const char* str, char target) {
-  int count = 0;
-  for (size_t i = 0; str[i] != '\0'; i++) {
-    if (str[i] == target) count++;
+void applyAngleToken(const char* token, int servo_idx) {
+  if (token == nullptr || token[0] == '\0') return;
+  int delta_deg = (int)lroundf(strtod(token, nullptr));
+  target_angle[servo_idx] = constrain(offset[servo_idx] + delta_deg, 0, 180);
+}
+
+ParsedCommand parseElements(char* buf, size_t buf_size, const char* line) {
+  ParsedCommand cmd;
+  if (line == nullptr || line[0] == '\0' || buf == nullptr || buf_size == 0) {
+    return cmd;
   }
-  return count;
+
+  strncpy(buf, line, buf_size - 1);
+  buf[buf_size - 1] = '\0';
+
+  char* tok = strtok(buf, ",");
+  while (tok != nullptr && cmd.count < 4) {
+    cmd.elements[cmd.count++] = tok;
+    tok = strtok(nullptr, ",");
+  }
+
+  return cmd;
 }
 
 void parseCommand(const char* line) {
-  if (line == nullptr || line[0] == '\0') return;
-
   char copy[64];
-  strncpy(copy, line, sizeof(copy) - 1);
-  copy[sizeof(copy) - 1] = '\0';
+  ParsedCommand cmd = parseElements(copy, sizeof(copy), line);
 
-  int commas = countChar(copy, ',');
+  if (cmd.count < 2 || cmd.elements[0] == nullptr) return;
 
-  // 3 comma-separated arm angles: "d1,d2,d3"
-  if (commas == 2) {
-    int joint_idx = 0;
-    char* token = strtok(copy, ",");
-    while (token != nullptr && joint_idx < 3) {
-      int delta_deg = (int)lroundf(strtof(token, nullptr));
-      int angle = offset[joint_idx] + delta_deg;
-      target_angle[joint_idx] = constrain(angle, 0, 180);
-      joint_idx++;
-      token = strtok(nullptr, ",");
+  if (strcmp(cmd.elements[0], "a") == 0) {
+    int angle_count = cmd.count - 1;
+    if (angle_count > 3) angle_count = 3;
+    for (int i = 0; i < angle_count; i++) {
+      applyAngleToken(cmd.elements[1 + i], i);
     }
-  }
-  // 1 gripper angle value: "g1"
-  else if (commas == 0) {
-    int delta_deg = (int)lroundf(strtof(copy, nullptr));
-    int angle = offset[3] + delta_deg;
-    target_angle[3] = constrain(angle, 0, 180);
+  } else if (strcmp(cmd.elements[0], "g") == 0) {
+    applyAngleToken(cmd.elements[1], 3);
   }
 }
 
@@ -66,6 +75,7 @@ void readSerialNonBlocking() {
     if (c == '\n') {
       line_buf[buf_idx] = '\0';
       parseCommand(line_buf);
+      // Serial.println(line_buf);
       buf_idx = 0;
     } else if (c != '\r' && buf_idx < sizeof(line_buf) - 1) {
       line_buf[buf_idx++] = c;
